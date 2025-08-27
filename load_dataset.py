@@ -5,9 +5,8 @@ from torch.nn.utils.rnn import pad_sequence
 import torch
 
 from utils import wav_to_mel, transpose_major, normalize_mel
-
-_data_token = "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"
-login(_data_token)
+import os
+_data_token = os.getenv("HF_TOKEN")
 
 def load_data(num_points):
     dataset = load_dataset(
