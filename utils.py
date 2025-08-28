@@ -1,3 +1,5 @@
+import math
+
 import librosa
 import numpy as np
 import torch
@@ -8,15 +10,15 @@ from tokenizer import tokenize
 
 
 def wav_to_mel(
-    y,
-    sr=22050,
-    n_fft=1024,
-    hop_length=256,
-    win_length=1024,
-    n_mels=80,
-    fmin=0,
-    fmax=8000,
-    min_level_db=-60,
+        y,
+        sr=22050,
+        n_fft=1024,
+        hop_length=256,
+        win_length=1024,
+        n_mels=80,
+        fmin=0,
+        fmax=8000,
+        min_level_db=-60,
 ):
     stft = librosa.stft(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
     spectrogram = np.abs(stft) ** 2  # power spectrogram
@@ -27,10 +29,12 @@ def wav_to_mel(
     mel_db = librosa.power_to_db(mel, ref=np.max)
     return mel_db
 
+
 def normalize_mel(mel_db: torch.Tensor):
     mel_min = np.min(mel_db)
     mel_max = np.max(mel_db)
     return (mel_db - mel_min) / (mel_max - mel_min + 1e-9)
+
 
 def train_val_split(dataset, split=0.8):
     n_total = len(dataset)
@@ -44,6 +48,7 @@ def train_val_split(dataset, split=0.8):
 
     return train_dataset, val_dataset
 
+
 def spec_augment(mel):
     freq_mask = torchaudio.transforms.FrequencyMasking(freq_mask_param=25)
     time_mask = torchaudio.transforms.TimeMasking(time_mask_param=25)
@@ -52,18 +57,22 @@ def spec_augment(mel):
     mel = time_mask(mel)
     return mel
 
+
 def add_noise(mel, noise_level):
     return mel + noise_level * torch.randn_like(mel)
+
 
 def random_gain(mel, min_gain=0.6, max_gain=1.4):
     gain = torch.empty(1).uniform_(min_gain, max_gain).item()
     return mel * gain
+
 
 def augment_mel(mel):
     mel = add_noise(mel, noise_level=0.5)
     mel = spec_augment(mel)
     mel = random_gain(mel)
     return mel
+
 
 def transpose_major(x):
     if isinstance(x, torch.Tensor):
@@ -73,9 +82,11 @@ def transpose_major(x):
             return x.transpose(1, 0)
         return x.transpose(0, 2, 1)
 
+
 def sample_text_to_emb(text):
     text_tensor = torch.tensor(tokenize(text), dtype=torch.long)
     return text_tensor.unsqueeze(0)
+
 
 def save_model(model, path, optimizer=None):
     checkpoint = {
@@ -86,6 +97,7 @@ def save_model(model, path, optimizer=None):
     torch.save(checkpoint, path)
     print(f"Model saved to {path}")
 
+
 def load_model(model, path, optimizer=None, map_location=None):
     checkpoint = torch.load(path, map_location=map_location)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -93,3 +105,15 @@ def load_model(model, path, optimizer=None, map_location=None):
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     print(f"Model loaded from {path}")
     return model, optimizer
+
+
+def guided_attn_loss(attn, g=0.2):
+    B, T_dec, T_enc = attn.size()
+    W = torch.arange(T_dec).unsqueeze(1) / T_dec
+    J = torch.arange(T_enc).unsqueeze(0) / T_enc
+    G = 1 - torch.exp(-(W - J) ** 2 / (2 * g * g))
+    G = G.to(attn.device)
+    return (attn * G.unsqueeze(0)).mean()
+
+def cosine_teach_force(progress):
+    return 0.2 + 0.8 * (0.5 * (1 + math.cos(math.pi * progress / 100.0)))

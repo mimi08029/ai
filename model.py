@@ -1,25 +1,15 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
-# -----------------------------
-# Helper: Conv block for PostNet
-# -----------------------------
 class ConvPostNetBlock(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, k: int, p: int, dropout: float = 0.5,
+    def __init__(self, in_ch: int, out_ch: int, k: int, p: int, dropout: float = 0.2,
                  norm: str = "instance", activation: nn.Module = nn.Tanh):
         super().__init__()
         self.conv = nn.Conv1d(in_ch, out_ch, kernel_size=k, padding=p)
-        if norm == "batch":
-            self.norm = nn.BatchNorm1d(out_ch)
-        elif norm == "instance":
-            self.norm = nn.InstanceNorm1d(out_ch, affine=True)
-        elif norm == "group":
-            g = max(1, min(8, out_ch))
-            self.norm = nn.GroupNorm(g, out_ch)
-        else:
-            self.norm = nn.Identity()
+        self.norm = nn.InstanceNorm1d(out_ch, affine=True)
         self.act = activation()
         self.drop = nn.Dropout(dropout)
 
@@ -30,12 +20,8 @@ class ConvPostNetBlock(nn.Module):
         x = self.drop(x)
         return x
 
-
-# -----------------------------
-# PreNet (with strong dropout per Tacotron2)
-# -----------------------------
 class PreNet(nn.Module):
-    def __init__(self, d_model: int, vocab_size: int, p_drop: float = 0.5):
+    def __init__(self, d_model: int, vocab_size: int, p_drop: float = 0.2):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, d_model)
         self.fc1 = nn.Linear(d_model, d_model)
@@ -44,48 +30,48 @@ class PreNet(nn.Module):
         self.drop = nn.Dropout(p_drop)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, T]
-        h = self.emb(x)                 # [B, T, D]
+        h = self.emb(x)
         h = F.relu(self.fc1(h))
         h = self.drop(h)
         h = F.relu(self.fc2(h))
         h = self.drop(h)
         h = self.fc3(h)
-        return h                        # [B, T, D]
+        return h
 
+class DecoderPreNet(nn.Module):
+    def __init__(self, in_dim: int, hidden_dim: int, p_drop: float = 0.2):
+        super().__init__()
+        self.fc1 = nn.Linear(in_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.p = p_drop
 
-# -----------------------------
-# PostNet (outputs a residual CORRECTION; no internal residual add)
-# -----------------------------
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = F.relu(self.fc1(x))
+        h = F.dropout(h, p=self.p, training=True)
+        h = F.relu(self.fc2(h))
+        h = F.dropout(h, p=self.p, training=True)
+        return h
+
 class PostNet(nn.Module):
-    def __init__(self, mel_dim: int, num_layers: int = 5, kernel_size: int = 5, channels: int = 512,
-                 norm: str = "instance", dropout: float = 0.5):
+    def __init__(self, mel_dim: int, num_layers: int = 5, kernel_size: int = 5,
+                 norm: str = "instance", dropout: float = 0.2):
         super().__init__()
         pads = (kernel_size // 2)
         blocks = []
-        # first layer
-        blocks.append(ConvPostNetBlock(mel_dim, channels, kernel_size, pads, dropout=dropout, norm=norm))
-        # middle layers
+        blocks.append(ConvPostNetBlock(mel_dim, mel_dim, kernel_size, pads, dropout=dropout, norm=norm))
         for _ in range(num_layers - 2):
-            blocks.append(ConvPostNetBlock(channels, channels, kernel_size, pads, dropout=dropout, norm=norm))
-        # final layer (no activation, no dropout)
-        self.conv_last = nn.Conv1d(channels, mel_dim, kernel_size=1, padding=0)
-        self.norm_last = nn.Identity()
+            blocks.append(ConvPostNetBlock(mel_dim, mel_dim, kernel_size, pads, dropout=dropout, norm=norm))
+        self.conv_last = nn.Conv1d(mel_dim, mel_dim, kernel_size=1, padding=0)
         self.blocks = nn.ModuleList(blocks)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, T, mel]
-        y = x.transpose(1, 2)  # [B, mel, T]
+        y = x.transpose(1, 2)
         for blk in self.blocks:
             y = blk(y)
         y = self.conv_last(y)
-        y = y.transpose(1, 2)  # [B, T, mel]
-        return y  # residual correction; caller should add to input mels
+        y = y.transpose(1, 2)
+        return y
 
-
-# -----------------------------
-# Location Sensitive Attention
-# -----------------------------
 class LocationSensitiveAttention(nn.Module):
     def __init__(self, d_model: int, kernel_size: int = 31):
         super().__init__()
@@ -97,22 +83,29 @@ class LocationSensitiveAttention(nn.Module):
     def forward(self, query: torch.Tensor, memory: torch.Tensor,
                 prev_attn: torch.Tensor, cum_attn: torch.Tensor,
                 mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        # query: [B, D], memory: [B, T_enc, D], prev_attn/cum_attn: [B, T_enc]
-        loc = torch.cat([prev_attn.unsqueeze(1), cum_attn.unsqueeze(1)], dim=1)  # [B, 2, T_enc]
-        loc = self.location_layer(loc).transpose(1, 2)                           # [B, T_enc, D]
-        q = self.query_layer(query).unsqueeze(1)                                 # [B, 1, D]
-        m = self.memory_layer(memory)                                            # [B, T_enc, D]
-        e = self.v(torch.tanh(q + m + loc)).squeeze(-1)                          # [B, T_enc]
+
+        B, T_enc, D = memory.shape
+
+        loc = torch.cat([prev_attn.unsqueeze(1), cum_attn.unsqueeze(1)], dim=1)
+        loc = self.location_layer(loc).transpose(1, 2)
+
+        q = self.query_layer(query).unsqueeze(1)
+        m = self.memory_layer(memory)
+
+        e = self.v(torch.tanh(q + m + loc)).squeeze(-1)
+
         if mask is not None:
-            e = e.masked_fill(mask, float('-inf'))
+            if not (mask.dtype == torch.bool and mask.shape == e.shape):
+                raise ValueError(f"mask must be bool with shape {e.shape}, got {mask.dtype}, {mask.shape}")
+            e = e.masked_fill(mask, -1e9)
+            all_masked = mask.all(dim=1)
+            if all_masked.any():
+                e[all_masked, 0] = 0.0
+
         a = torch.softmax(e, dim=1)
-        ctx = torch.bmm(a.unsqueeze(1), memory).squeeze(1)                        # [B, D]
+        ctx = torch.bmm(a.unsqueeze(1), memory).squeeze(1)
         return ctx, a
 
-
-# -----------------------------
-# Encoder (BiLSTM + projection)
-# -----------------------------
 class Encoder(nn.Module):
     def __init__(self, d_model: int, num_layers: int = 1, dropout: float = 0.2):
         super().__init__()
@@ -121,146 +114,153 @@ class Encoder(nn.Module):
         self.linear = nn.Linear(d_model * 2, d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y, _ = self.lstm(x)                 # [B, T, 2D]
-        y = self.linear(y)                  # [B, T, D]
+        y, _ = self.lstm(x)
+        y = self.linear(y)
         return y
 
-
-# -----------------------------
-# Decoder with stop-token branch and dropout around LSTMCells
-# -----------------------------
 class Decoder(nn.Module):
     def __init__(self, d_model: int, mel_dim: int = 80, p_drop: float = 0.2):
         super().__init__()
         self.mel_dim = mel_dim
-        self.att_rnn = nn.LSTMCell(d_model + mel_dim, d_model)
+        self.prenet = DecoderPreNet(mel_dim, d_model, p_drop=p_drop)
+        self.att_rnn = nn.LSTMCell(d_model + d_model, d_model)
         self.dec_rnn = nn.LSTMCell(d_model + d_model, d_model)
         self.att = LocationSensitiveAttention(d_model)
         self.lin_mel = nn.Linear(d_model, mel_dim)
-        self.lin_stop = nn.Linear(d_model, 1)   # stop-token (gate) logits
+        self.lin_stop = nn.Linear(d_model, 1)
         self.drop_in = nn.Dropout(p_drop)
         self.drop_h = nn.Dropout(p_drop)
 
-    def _init_state(self, B: int, D: int, T_enc: int, device) -> Tuple[torch.Tensor, ...]:
-        ctx = torch.zeros(B, D, device=device)
-        a = torch.zeros(B, T_enc, device=device)
-        a_cum = torch.zeros(B, T_enc, device=device)
-        h_att = torch.zeros(B, D, device=device); c_att = torch.zeros(B, D, device=device)
-        h_dec = torch.zeros(B, D, device=device); c_dec = torch.zeros(B, D, device=device)
+    def _init_state(self, B: int, D: int, T_enc: int, device, dtype):
+        zeros = lambda *s: torch.zeros(*s, device=device, dtype=dtype)
+        ctx = zeros(B, D)
+        a = zeros(B, T_enc)
+        a_cum = zeros(B, T_enc)
+        h_att = zeros(B, D); c_att = zeros(B, D)
+        h_dec = zeros(B, D); c_dec = zeros(B, D)
         return (ctx, a, a_cum, h_att, c_att, h_dec, c_dec)
 
-    def forward(self, enc: torch.Tensor, mel_in: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Teacher-forced decoding
-        B, T_dec, _ = mel_in.shape
-        device = enc.device
-        D = enc.size(-1); T_enc = enc.size(1)
-        state = self._init_state(B, D, T_enc, device)
-
-        mels = []
-        stops = []
-        for t in range(T_dec):
-            prev = mel_in[:, t, :]  # [B, mel]
-            m, s, state = self._step(enc, prev, state)
-            mels.append(m.unsqueeze(1))
-            stops.append(s.unsqueeze(1))
-        mel_out = torch.cat(mels, dim=1)       # [B, T_dec, mel]
-        stop_logits = torch.cat(stops, dim=1)  # [B, T_dec, 1]
-        return mel_out, stop_logits
-
-    def _step(self, enc: torch.Tensor, prev_mel: torch.Tensor,
-              state: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, torch.Tensor, Tuple[torch.Tensor, ...]]:
+    def _step(self, enc, prev_mel, state, attn_mask):
         ctx, a, a_cum, h_att, c_att, h_dec, c_dec = state
-        # attention LSTM
-        att_in = torch.cat([prev_mel, ctx], dim=-1)
+
+        pm = self.prenet(prev_mel)
+
+        att_in = torch.cat([pm, ctx], dim=-1)
         att_in = self.drop_in(att_in)
         h_att, c_att = self.att_rnn(att_in, (h_att, c_att))
         h_att = self.drop_h(h_att)
-        # attention
-        ctx, a = self.att(h_att, enc, a, a_cum)
+
+        ctx, a = self.att(h_att, enc, a, a_cum, mask=attn_mask)
         a_cum = a_cum + a
-        # decoder LSTM
+
         dec_in = torch.cat([h_att, ctx], dim=-1)
         dec_in = self.drop_in(dec_in)
         h_dec, c_dec = self.dec_rnn(dec_in, (h_dec, c_dec))
         h_dec = self.drop_h(h_dec)
-        # projections
+
         mel = self.lin_mel(h_dec)
-        stop = self.lin_stop(h_dec).squeeze(-1)  # [B]
+        stop = torch.sigmoid(self.lin_stop(h_dec))
+
         new_state = (ctx, a, a_cum, h_att, c_att, h_dec, c_dec)
-        return mel, stop, new_state
+        return mel, stop, a, new_state
+
+    def forward(self, enc, mel_in, teacher_forcing=1.0,
+                attn_mask=None, return_alignments=False):
+        B, T_dec, _ = mel_in.shape
+        device, dtype = enc.device, enc.dtype
+        D, T_enc = enc.size(-1), enc.size(1)
+        state = self._init_state(B, D, T_enc, device, dtype)
+
+        mels, stops, alignments = [], [], []
+        prev_mel = mel_in[:, 0]
+
+        for t in range(T_dec):
+            if (t > 0) and (torch.rand((), device=device) < teacher_forcing):
+                prev_mel = mel_in[:, t]
+
+            m, s, a, state = self._step(enc, prev_mel, state, attn_mask)
+            mels.append(m.unsqueeze(1))
+            stops.append(s.unsqueeze(1))
+            if return_alignments:
+                alignments.append(a.unsqueeze(1))
+            prev_mel = m.detach()
+
+        mel_out = torch.cat(mels, dim=1)
+        stop_out = torch.cat(stops, dim=1).squeeze(-1)
+        attn_out = torch.cat(alignments, dim=1) if return_alignments else None
+        return mel_out, stop_out, attn_out
 
     @torch.no_grad()
-    def infer(self, enc: torch.Tensor, go_frame: torch.Tensor, max_len: int = 1000,
-              stop_threshold: float = 0.6, min_len: int = 10, early_stop_patience: int = 5) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Autoregressive decoding with stop-token termination
-        device = enc.device
+    def infer(self, enc, go_frame, max_len=1000, attn_mask=None, return_alignments=False):
+        device, dtype = enc.device, enc.dtype
         B, T_enc, D = enc.shape
-        state = self._init_state(B, D, T_enc, device)
-        prev = go_frame  # [B, mel]
-        outputs = []
-        gate_logits = []
-        over_thresh = 0
-        for t in range(max_len):
-            mel, stop, state = self._step(enc, prev, state)
+        state = self._init_state(B, D, T_enc, device, dtype)
+        prev = go_frame
+        outputs, stops, aligns = [], [], []
+
+        for _ in range(max_len):
+            mel, s, a, state = self._step(enc, prev, state, attn_mask)
             outputs.append(mel.unsqueeze(1))
-            gate_logits.append(stop.unsqueeze(1))
+            stops.append(s.unsqueeze(1))
+            if return_alignments:
+                aligns.append(a.unsqueeze(1))
             prev = mel
-            if t + 1 >= min_len:
-                if torch.sigmoid(stop).mean().item() > stop_threshold:
-                    over_thresh += 1
-                else:
-                    over_thresh = 0
-                if over_thresh >= early_stop_patience:
-                    break
-        mel_out = torch.cat(outputs, dim=1) if outputs else torch.zeros(B, 0, self.mel_dim, device=device)
-        gates = torch.cat(gate_logits, dim=1) if gate_logits else torch.zeros(B, 0, 1, device=device)
-        return mel_out, gates
+            if (s > 0.5).any():
+                break
 
+        mel_out = torch.cat(outputs, dim=1)
+        stop_out = torch.cat(stops, dim=1).squeeze(-1)
+        attn = torch.cat(aligns, dim=1) if (return_alignments and aligns) else None
+        return mel_out, stop_out, attn
 
-# -----------------------------
-# Full Model
-# -----------------------------
 class TTSModel(nn.Module):
-    def __init__(self, d_model: int, vocab_size: int, mel_dim: int, device: torch.device):
+    def __init__(self, d_model, vocab_size, mel_dim, device):
         super().__init__()
         self.d_model = d_model
         self.vocab_size = vocab_size
         self.mel_dim = mel_dim
         self.device = device
-        # modules
-        self.pre = PreNet(d_model, vocab_size, p_drop=0.5)
+        self.pre = PreNet(d_model, vocab_size, p_drop=0.2)
         self.encoder = Encoder(d_model, num_layers=1, dropout=0.2)
         self.decoder = Decoder(d_model, mel_dim, p_drop=0.2)
-        self.post = PostNet(mel_dim, num_layers=5, kernel_size=5, channels=512, norm="instance", dropout=0.5)
+        self.post = PostNet(mel_dim, num_layers=5, kernel_size=5,
+                            norm="instance", dropout=0.2)
         self.to(device)
 
-    def get_go(self, B: int) -> torch.Tensor:
-        return torch.zeros((B, 1, self.mel_dim), device=self.device)
+    def get_go(self, B, dtype=torch.float32):
+        return torch.zeros((B, 1, self.mel_dim), device=self.device, dtype=dtype)
 
-    # Backward compatible forward: by default returns only mel_post like your original code.
-    # If return_gate=True, also returns stop-token logits so you can add a gate loss.
-    def forward(self, x: torch.Tensor, mel: torch.Tensor, return_gate: bool = False):
-        # x: [B, T_txt], mel: [B, T_mel, mel_dim]
+    def forward(self, x, mel, teacher_forcing=1.0,
+                enc_mask=None, return_alignments=False):
         enc_in = self.pre(x)
         enc_out = self.encoder(enc_in)
-        # Teacher forcing inputs (prepend <GO>)
-        go = self.get_go(enc_out.size(0))
+
+        go = self.get_go(enc_out.size(0), dtype=mel.dtype)
         mel_tf = torch.cat([go, mel[:, :-1, :]], dim=1)
-        mel_out, stop_logits = self.decoder(enc_out, mel_tf)   # raw decoder mels
-        mel_post = self.post(mel_out) + mel_out                # add residual correction
-        if return_gate:
-            return mel_post, stop_logits
-        return mel_post
+
+        mel_out, stop_out, attn = self.decoder(
+            enc_out, mel_tf, teacher_forcing=teacher_forcing,
+            attn_mask=enc_mask, return_alignments=return_alignments
+        )
+
+        mel_post = self.post(mel_out) + mel_out
+        return mel_out, mel_post, stop_out, attn
 
     @torch.no_grad()
-    def inference(self, x: torch.Tensor, max_len: int = 1000):
+    def inference(self, x, max_len=1000, enc_mask=None, return_alignments=False):
         self.eval()
-        device = next(self.parameters()).device
-        x = x.to(device)
+        x = x.to(self.device)
+
         enc_in = self.pre(x)
         enc_out = self.encoder(enc_in)
         B = enc_out.size(0)
-        go = self.get_go(B).squeeze(1)  # [B, mel]
-        mel_out, gates = self.decoder.infer(enc_out, go, max_len=max_len)
+
+        go = self.get_go(B, dtype=enc_out.dtype).squeeze(1)
+
+        mel_out, stop_out, attn = self.decoder.infer(
+            enc_out, go, max_len=max_len,
+            attn_mask=enc_mask, return_alignments=return_alignments
+        )
+
         mel_post = self.post(mel_out) + mel_out
-        return mel_post  # for compatibility; you can also return gates if you want
+        return mel_out, mel_post, stop_out, attn
