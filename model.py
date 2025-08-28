@@ -205,8 +205,6 @@ class Decoder(nn.Module):
             if return_alignments:
                 aligns.append(a.unsqueeze(1))
             prev = mel
-            if (s > 0.5).any():
-                break
 
         mel_out = torch.cat(outputs, dim=1)
         stop_out = torch.cat(stops, dim=1).squeeze(-1)

@@ -1,25 +1,18 @@
-# IDE settings
 .idea/
 
-# Data files
 .data/
 
-# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual environments
 .venv/
 venv/
 env/
 
-# OS files
 .DS_Store
 Thumbs.db
 
-# Logs
 *.log
 
-# Jupyter checkpoints
 .ipynb_checkpoints/

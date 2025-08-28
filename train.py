@@ -6,7 +6,6 @@ import torch.optim as optim
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import tqdm
-from scipy.spatial.distance import cosine
 
 from load_dataset import load_data, make_dataset, make_dataloader
 from model import TTSModel
@@ -17,7 +16,7 @@ device      = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPOCHS      = 20
 D_MODEL     = 500
 MEL_DIM     = 80
-NUM_DATA    = 200
+NUM_DATA    = 2
 BATCH_SIZE  = 2
 VOCAB_SIZE  = vocab_size()
 SPLIT       = 0.8
@@ -47,7 +46,6 @@ if __name__ == "__main__":
     train_losses, val_losses = [], []
 
     for epoch in range(EPOCHS):
-        # ---------------- Train ---------------- #
         model.train()
         running_loss = 0.0
         teacher_forcing = cosine_teach_force((epoch + 1) / EPOCHS)
@@ -79,14 +77,13 @@ if __name__ == "__main__":
         avg_train_loss = running_loss / max(1, len(dataloader_train))
         train_losses.append(avg_train_loss)
 
-        # ---------------- Val ---------------- #
         model.eval()
         running_val_loss = 0.0
         with torch.no_grad():
             for mel, label in tqdm.tqdm(dataloader_val, desc=f"Epoch {epoch+1}/{EPOCHS} [Val]"):
                 mel   = mel.to(device)
                 label = label.to(device)
-
+                print(mel.shape)
                 mel_out, mel_post, _, _ = model.inference(label, max_len=mel.size(1))
 
                 loss_mel = criterion_mel(mel_out, mel) + criterion_mel(mel_post, mel)
