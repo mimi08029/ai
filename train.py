@@ -46,6 +46,7 @@ if __name__ == "__main__":
 
     try:
         load_model(model, "tts_model.pt", optimizer, device)
+        optimizer.param_groups[0]["lr"] = LR
         print("Loaded checkpoint.")
     except Exception as e:
         print("No/invalid checkpoint, training from scratch.", e)
