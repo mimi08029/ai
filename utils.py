@@ -7,34 +7,29 @@ import torchaudio
 from torch.utils.data import random_split
 
 from tokenizer import tokenize
-
-
 def wav_to_mel(
-        y,
-        sr=22050,
-        n_fft=1024,
-        hop_length=256,
-        win_length=1024,
-        n_mels=80,
-        fmin=0,
-        fmax=8000,
-        min_level_db=-60,
+    y,
+    sr=22050,
+    n_fft=1024,
+    hop_length=256,
+    win_length=1024,
+    n_mels=80,
+    fmin=0,
+    fmax=8000,
+    min_level_db=-80.0,
+    ref_level_db=1.0,   # new
 ):
     stft = librosa.stft(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
-    spectrogram = np.abs(stft) ** 2  # power spectrogram
-
+    spectrogram = np.abs(stft)
     mel_basis = librosa.filters.mel(sr=sr, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax)
     mel = np.dot(mel_basis, spectrogram)
+    mel = np.maximum(mel, 1e-5)
 
-    mel_db = librosa.power_to_db(mel, ref=np.max)
-    return mel_db
+    mel_db = librosa.power_to_db(mel, ref=ref_level_db)
+    mel_db = np.clip(mel_db, min_level_db, 0)
 
-
-def normalize_mel(mel_db: torch.Tensor):
-    mel_min = np.min(mel_db)
-    mel_max = np.max(mel_db)
-    return (mel_db - mel_min) / (mel_max - mel_min + 1e-9)
-
+    mel_norm = (mel_db - min_level_db) / -min_level_db
+    return mel_norm.astype(np.float32)
 
 def train_val_split(dataset, split=0.8):
     n_total = len(dataset)
@@ -50,8 +45,8 @@ def train_val_split(dataset, split=0.8):
 
 
 def spec_augment(mel):
-    freq_mask = torchaudio.transforms.FrequencyMasking(freq_mask_param=25)
-    time_mask = torchaudio.transforms.TimeMasking(time_mask_param=25)
+    freq_mask = torchaudio.transforms.FrequencyMasking(freq_mask_param=15)
+    time_mask = torchaudio.transforms.TimeMasking(time_mask_param=10)
 
     mel = freq_mask(mel)
     mel = time_mask(mel)
@@ -62,15 +57,8 @@ def add_noise(mel, noise_level):
     return mel + noise_level * torch.randn_like(mel)
 
 
-def random_gain(mel, min_gain=0.6, max_gain=1.4):
-    gain = torch.empty(1).uniform_(min_gain, max_gain).item()
-    return mel * gain
-
-
 def augment_mel(mel):
-    mel = add_noise(mel, noise_level=0.5)
-    mel = spec_augment(mel)
-    mel = random_gain(mel)
+    mel = add_noise(mel, noise_level=0.1)
     return mel
 
 
@@ -116,4 +104,4 @@ def guided_attn_loss(attn, g=0.2):
     return (attn * G.unsqueeze(0)).mean()
 
 def cosine_teach_force(progress):
-    return 0.2 + 0.8 * (0.5 * (1 + math.cos(math.pi * progress / 100.0)))
+    return 0.2 + 0.8 * (0.5 * (1 + math.cos(math.pi * progress)))

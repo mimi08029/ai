@@ -4,7 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch
 
-from utils import wav_to_mel, transpose_major, normalize_mel
+from utils import wav_to_mel, transpose_major
 import os
 _data_token = os.getenv("HF_TOKEN")
 
@@ -38,7 +38,7 @@ class TTSDataset(Dataset):
 
     def __getitem__(self, idx):
         audio, text = self.pairs[idx]
-        audio_norm = normalize_mel(wav_to_mel(audio))
+        audio_norm = wav_to_mel(audio)
         audio_tensor = transpose_major(torch.tensor(audio_norm, dtype=torch.float32))
         text_tensor = torch.tensor(self.tokenize(text), dtype=torch.long)
         return audio_tensor, text_tensor

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, List
 
 class ConvPostNetBlock(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, k: int, p: int, dropout: float = 0.2,
+    def __init__(self, in_ch: int, out_ch: int, k: int, p: int, dropout: float = 0.,
                  norm: str = "instance", activation: nn.Module = nn.Tanh):
         super().__init__()
         self.conv = nn.Conv1d(in_ch, out_ch, kernel_size=k, padding=p)
@@ -20,41 +20,55 @@ class ConvPostNetBlock(nn.Module):
         x = self.drop(x)
         return x
 
-class PreNet(nn.Module):
-    def __init__(self, d_model: int, vocab_size: int, p_drop: float = 0.2):
+
+class EmbNet(nn.Module):
+    def __init__(self, d_model: int, vocab_size: int, p_drop: float = 0.5,
+                 n_conv: int = 3, k: int = 5):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, d_model)
-        self.fc1 = nn.Linear(d_model, d_model)
-        self.fc2 = nn.Linear(d_model, d_model)
-        self.fc3 = nn.Linear(d_model, d_model)
-        self.drop = nn.Dropout(p_drop)
+        self.emb.weight.data.normal_(0, 1.0 / math.sqrt(d_model))
+
+        convs = []
+        for i in range(n_conv):
+            convs.append(nn.Sequential(
+                nn.Conv1d(d_model, d_model, kernel_size=k, padding=(k - 1) // 2),
+                nn.BatchNorm1d(d_model),
+                nn.ReLU(),
+                nn.Dropout(p_drop)
+            ))
+        self.convs = nn.ModuleList(convs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.emb(x)
-        h = F.relu(self.fc1(h))
-        h = self.drop(h)
-        h = F.relu(self.fc2(h))
-        h = self.drop(h)
-        h = self.fc3(h)
+        h = h.transpose(1, 2)
+
+        for conv in self.convs:
+            h = conv(h)
+
+        h = h.transpose(1, 2)
         return h
 
 class DecoderPreNet(nn.Module):
-    def __init__(self, in_dim: int, hidden_dim: int, p_drop: float = 0.2):
+    def __init__(self, in_dim: int, hidden_sizes=[256, 256], p_drop: float = 0.5):
         super().__init__()
-        self.fc1 = nn.Linear(in_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        layers = []
+        current_dim = in_dim
+        for hdim in hidden_sizes:
+            layers.append(nn.Linear(current_dim, hdim))
+            current_dim = hdim
+        self.layers = nn.ModuleList(layers)
         self.p = p_drop
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = F.relu(self.fc1(x))
-        h = F.dropout(h, p=self.p, training=True)
-        h = F.relu(self.fc2(h))
-        h = F.dropout(h, p=self.p, training=True)
-        return h
+        for fc in self.layers:
+            x = F.relu(fc(x))
+            x = F.dropout(x, p=self.p)
+        return x
+
 
 class PostNet(nn.Module):
     def __init__(self, mel_dim: int, num_layers: int = 5, kernel_size: int = 5,
-                 norm: str = "instance", dropout: float = 0.2):
+                 norm: str = "instance", dropout: float = 0.):
         super().__init__()
         pads = (kernel_size // 2)
         blocks = []
@@ -72,22 +86,38 @@ class PostNet(nn.Module):
         y = y.transpose(1, 2)
         return y
 
-class LocationSensitiveAttention(nn.Module):
-    def __init__(self, d_model: int, kernel_size: int = 31):
-        super().__init__()
-        self.query_layer = nn.Linear(d_model, d_model, bias=False)
-        self.memory_layer = nn.Linear(d_model, d_model, bias=False)
-        self.location_layer = nn.Conv1d(2, d_model, kernel_size=kernel_size, padding=kernel_size // 2, bias=False)
-        self.v = nn.Linear(d_model, 1, bias=False)
 
-    def forward(self, query: torch.Tensor, memory: torch.Tensor,
-                prev_attn: torch.Tensor, cum_attn: torch.Tensor,
-                mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+class LocationSensitiveAttention(nn.Module):
+    def __init__(self, d_model: int, kernel_size: int = 31, out_channels: int = 32):
+        super().__init__()
+        self.query_layer = nn.Linear(d_model, d_model)
+        self.memory_layer = nn.Linear(d_model, d_model)
+
+        self.location_conv = nn.Conv1d(
+            in_channels=2,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+        )
+
+        self.location_proj = nn.Linear(out_channels, d_model)
+
+        self.v = nn.Linear(d_model, 1)
+
+    def forward(
+            self,
+            query: torch.Tensor,  # (B, D)
+            memory: torch.Tensor,  # (B, T_enc, D)
+            prev_attn: torch.Tensor,  # (B, T_enc)
+            cum_attn: torch.Tensor,  # (B, T_enc)
+            mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         B, T_enc, D = memory.shape
 
-        loc = torch.cat([prev_attn.unsqueeze(1), cum_attn.unsqueeze(1)], dim=1)
-        loc = self.location_layer(loc).transpose(1, 2)
+        loc = torch.cat([prev_attn.unsqueeze(1), cum_attn.unsqueeze(1)], dim=1)  # (B, 2, T_enc)
+        loc = self.location_conv(loc).transpose(1, 2)
+        loc = self.location_proj(loc)
 
         q = self.query_layer(query).unsqueeze(1)
         m = self.memory_layer(memory)
@@ -95,8 +125,6 @@ class LocationSensitiveAttention(nn.Module):
         e = self.v(torch.tanh(q + m + loc)).squeeze(-1)
 
         if mask is not None:
-            if not (mask.dtype == torch.bool and mask.shape == e.shape):
-                raise ValueError(f"mask must be bool with shape {e.shape}, got {mask.dtype}, {mask.shape}")
             e = e.masked_fill(mask, -1e9)
             all_masked = mask.all(dim=1)
             if all_masked.any():
@@ -104,10 +132,12 @@ class LocationSensitiveAttention(nn.Module):
 
         a = torch.softmax(e, dim=1)
         ctx = torch.bmm(a.unsqueeze(1), memory).squeeze(1)
+
         return ctx, a
 
+
 class Encoder(nn.Module):
-    def __init__(self, d_model: int, num_layers: int = 1, dropout: float = 0.2):
+    def __init__(self, d_model: int, num_layers: int = 1, dropout: float = 0.):
         super().__init__()
         self.lstm = nn.LSTM(d_model, d_model, num_layers=num_layers, bidirectional=True,
                              batch_first=True, dropout=dropout if num_layers > 1 else 0.0)
@@ -119,11 +149,12 @@ class Encoder(nn.Module):
         return y
 
 class Decoder(nn.Module):
-    def __init__(self, d_model: int, mel_dim: int = 80, p_drop: float = 0.2):
+    def __init__(self, d_model: int, mel_dim: int = 80, p_drop: float = 0.):
         super().__init__()
         self.mel_dim = mel_dim
-        self.prenet = DecoderPreNet(mel_dim, d_model, p_drop=p_drop)
-        self.att_rnn = nn.LSTMCell(d_model + d_model, d_model)
+        self.pre_net_ff = 256
+        self.prenet = DecoderPreNet(mel_dim, hidden_sizes=[self.pre_net_ff, self.pre_net_ff], p_drop=0.5)
+        self.att_rnn = nn.LSTMCell(d_model + self.pre_net_ff, d_model)
         self.dec_rnn = nn.LSTMCell(d_model + d_model, d_model)
         self.att = LocationSensitiveAttention(d_model)
         self.lin_mel = nn.Linear(d_model, mel_dim)
@@ -218,11 +249,11 @@ class TTSModel(nn.Module):
         self.vocab_size = vocab_size
         self.mel_dim = mel_dim
         self.device = device
-        self.pre = PreNet(d_model, vocab_size, p_drop=0.2)
-        self.encoder = Encoder(d_model, num_layers=1, dropout=0.2)
-        self.decoder = Decoder(d_model, mel_dim, p_drop=0.2)
+        self.emb = EmbNet(d_model, vocab_size, p_drop=0.5)
+        self.encoder = Encoder(d_model, num_layers=1, dropout=0.)
+        self.decoder = Decoder(d_model, mel_dim, p_drop=0.)
         self.post = PostNet(mel_dim, num_layers=5, kernel_size=5,
-                            norm="instance", dropout=0.2)
+                            norm="instance", dropout=0.)
         self.to(device)
 
     def get_go(self, B, dtype=torch.float32):
@@ -230,7 +261,7 @@ class TTSModel(nn.Module):
 
     def forward(self, x, mel, teacher_forcing=1.0,
                 enc_mask=None, return_alignments=False):
-        enc_in = self.pre(x)
+        enc_in = self.emb(x)
         enc_out = self.encoder(enc_in)
 
         go = self.get_go(enc_out.size(0), dtype=mel.dtype)
@@ -249,7 +280,7 @@ class TTSModel(nn.Module):
         self.eval()
         x = x.to(self.device)
 
-        enc_in = self.pre(x)
+        enc_in = self.emb(x)
         enc_out = self.encoder(enc_in)
         B = enc_out.size(0)
 
