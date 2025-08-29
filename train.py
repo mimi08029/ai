@@ -113,6 +113,25 @@ if __name__ == "__main__":
                 loss_mel = criterion_mel(mel_out, mel) + criterion_mel_post(mel_post, mel)
                 running_val_loss += loss_mel.item()
 
+        if (epoch + 1) % 20 == 0:
+            with torch.no_grad():
+                plt.imshow(attn[0].detach().cpu().numpy(), aspect="auto", origin="lower")
+                plt.title("Attention Alignment")
+                plt.show()
+
+                plt.imshow(mel_post[0].detach().cpu().numpy(), aspect="auto", origin="lower")
+                plt.title("Mel Post")
+                plt.show()
+
+                mel_out, mel_post, stop_out, attn = model.inference(label, max_len=mel.size(1),
+                                                                    return_alignments=True)
+                plt.figure(figsize=(8, 4))
+                plt.title(f"Inference Example (Epoch {epoch + 1})")
+                plt.imshow(mel_post[0].cpu().numpy().T, aspect="auto", origin="lower")
+                plt.colorbar()
+                plt.show()
+
+        torch.save(model.state_dict(), "tts_model.pt")
         avg_val_loss = running_val_loss / max(1, len(dataloader_val))
         val_losses.append(avg_val_loss)
 
