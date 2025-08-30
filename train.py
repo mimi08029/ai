@@ -21,8 +21,8 @@ device      = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPOCHS      = 200
 D_MODEL     = 512
 MEL_DIM     = 80
-NUM_DATA    = 20          # tiny sanity set
-BATCH_SIZE  = 2
+NUM_DATA    = 8000          # tiny sanity set
+BATCH_SIZE  = 4
 VOCAB_SIZE  = vocab_size()
 SPLIT       = 0.8
 LR          = 5e-4
@@ -82,7 +82,7 @@ if __name__ == "__main__":
             loss_attn = guided_attn_loss(attn, g=0.2)
             loss_stop = criterion_stop(stop_out, stop_target)
 
-            loss = loss_mel + 2 * loss_attn + 0.1 * loss_stop
+            loss = loss_mel + 0.2 * loss_attn + 0.1 * loss_stop
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
             optimizer.step()
