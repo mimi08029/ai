@@ -106,10 +106,10 @@ class LocationSensitiveAttention(nn.Module):
 
     def forward(
             self,
-            query: torch.Tensor,  # (B, D)
-            memory: torch.Tensor,  # (B, T_enc, D)
-            prev_attn: torch.Tensor,  # (B, T_enc)
-            cum_attn: torch.Tensor,  # (B, T_enc)
+            query: torch.Tensor,
+            memory: torch.Tensor,
+            prev_attn: torch.Tensor,
+            cum_attn: torch.Tensor,
             mask: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
@@ -250,10 +250,10 @@ class TTSModel(nn.Module):
         self.mel_dim = mel_dim
         self.device = device
         self.emb = EmbNet(d_model, vocab_size, p_drop=0.5)
-        self.encoder = Encoder(d_model, num_layers=1, dropout=0.)
-        self.decoder = Decoder(d_model, mel_dim, p_drop=0.)
+        self.encoder = Encoder(d_model, num_layers=1, dropout=0.2)
+        self.decoder = Decoder(d_model, mel_dim, p_drop=0.2)
         self.post = PostNet(mel_dim, num_layers=5, kernel_size=5,
-                            norm="instance", dropout=0.)
+                            norm="instance", dropout=0.5)
         self.to(device)
 
     def get_go(self, B, dtype=torch.float32):
