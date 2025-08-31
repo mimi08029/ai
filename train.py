@@ -18,8 +18,8 @@ device      = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 EPOCHS      = 40
 D_MODEL     = 512
 MEL_DIM     = 80
-NUM_DATA    = 20         # tiny sanity set
-BATCH_SIZE  = 2
+NUM_DATA    = 4000        # tiny sanity set
+BATCH_SIZE  = 4
 VOCAB_SIZE  = vocab_size()
 SPLIT       = 0.9
 LR          = 1e-3
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     model = TTSModel(D_MODEL, vocab_size=VOCAB_SIZE, mel_dim=MEL_DIM, device=device).to(device)
     criterion_mel = nn.L1Loss()
     criterion_mel_post = nn.L1Loss()
-    # criterion_stop = nn.BCEWithLogitsLoss()
+    criterion_stop = nn.BCEWithLogitsLoss()
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 
@@ -60,22 +60,25 @@ if __name__ == "__main__":
         teacher_forcing = 1
 
         bar = tqdm.tqdm(dataloader_train, desc=f"Epoch {epoch + 1}/{EPOCHS} [Train]", leave=True)
-        for mel, label in bar:
+        for mel, label, stops, text_mask in bar:
             mel = mel.to(device)
             label = label.to(device)
-
+            text_mask = text_mask.to(device)
+            stops = stops.to(device)
             optimizer.zero_grad()
 
             mel_out, mel_post, stop_out, attn = model(
                 label, augment_mel(mel),
                 teacher_forcing=teacher_forcing,
+                enc_mask=text_mask,
                 return_alignments=True
             )
 
             loss_mel = criterion_mel(mel_out, mel) + criterion_mel_post(mel_post, mel)
+            loss_stop = criterion_stop(stop_out, stops)
             loss_attn = guided_attn_loss(attn, g=0.2)
 
-            loss = loss_mel + loss_attn * 2
+            loss = loss_mel + loss_attn * 0.5 + loss_stop * 0.1
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
             optimizer.step()
@@ -91,22 +94,27 @@ if __name__ == "__main__":
         model.eval()
         running_val_loss = 0.0
         with torch.no_grad():
-            for mel, label in tqdm.tqdm(dataloader_val,
+            for mel, label, stops, text_mask in tqdm.tqdm(dataloader_val,
                                         desc=f"Epoch {epoch + 1}/{EPOCHS} [Val]",
                                         leave=True):
                 mel = mel.to(device)
                 label = label.to(device)
-
-                mel_out_val, mel_post_val, _, _ = model(
+                text_mask = text_mask.to(device)
+                stops = stops.to(device)
+                mel_out_val, mel_post_val, stop_out, attn = model(
                     label, mel,
                     teacher_forcing=1.0,
-                    return_alignments=False
+                    return_alignments=True,
+                    enc_mask=text_mask,
                 )
 
                 loss_mel = criterion_mel(mel_out_val, mel) + criterion_mel_post(mel_post_val, mel)
-                running_val_loss += loss_mel.item()
+                loss_stop = criterion_stop(stop_out, stops)
+                loss_attn = guided_attn_loss(attn, g=0.2)
+                loss = loss_mel + loss_attn * 0.5 + loss_stop * 0.1
+                running_val_loss += loss.item()
 
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % (EPOCHS // 10) == 0:
             with torch.no_grad():
                 _, mel_post, stop_out, attn = model.inference(
                     label, max_len=mel.size(1), return_alignments=True

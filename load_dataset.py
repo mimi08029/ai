@@ -47,14 +47,21 @@ class TTSDataset(Dataset):
 def make_dataset(pairs, tokenize_fn=None):
     return TTSDataset(pairs, tokenize=tokenize_fn)
 
-
 def collate_fn(batch):
     audios, texts = zip(*batch)
+
     audios = [a.squeeze() for a in audios]
+    audio_lengths = torch.tensor([a.size(0) for a in audios], dtype=torch.long)
+    text_lengths = torch.tensor([t.size(0) for t in texts], dtype=torch.long)
+
     audios_padded = pad_sequence(audios, batch_first=True)
     texts_padded = pad_sequence(texts, batch_first=True, padding_value=0)
 
-    return audios_padded, texts_padded
+    stops = (torch.arange(audios_padded.size(1))[None, :] > audio_lengths[:, None]).to(torch.float)
+    text_mask  = torch.arange(texts_padded.size(1))[None, :] < text_lengths[:, None]
+
+    return audios_padded, texts_padded, stops, text_mask
+
 
 def make_dataloader(dataset, batch_size, shuffle=True):
     return DataLoader(

@@ -55,15 +55,14 @@ class DecoderPreNet(nn.Module):
         current_dim = in_dim
         for hdim in hidden_sizes:
             layers.append(nn.Linear(current_dim, hdim))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(p_drop))
             current_dim = hdim
-        self.layers = nn.ModuleList(layers)
-        self.p = p_drop
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for fc in self.layers:
-            x = F.relu(fc(x))
-            x = F.dropout(x, p=self.p, training=True)
-        return x
+        return self.net(x)
+
 
 
 class PostNet(nn.Module):
@@ -81,7 +80,7 @@ class PostNet(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x.transpose(1, 2)
         for blk in self.blocks:
-            y = y + blk(y)
+            y = blk(y)
         y = self.conv_last(y)
         y = y.transpose(1, 2)
         return y
@@ -190,7 +189,7 @@ class Decoder(nn.Module):
         h_dec = self.drop_h(h_dec)
 
         mel = self.lin_mel(h_dec)
-        stop = torch.sigmoid(self.lin_stop(h_dec))
+        stop = self.lin_stop(h_dec)
 
         new_state = (ctx, a, a_cum, h_att, c_att, h_dec, c_dec)
         return mel, stop, a, new_state
@@ -253,7 +252,7 @@ class TTSModel(nn.Module):
         self.encoder = Encoder(d_model, num_layers=1, dropout=0.2)
         self.decoder = Decoder(d_model, mel_dim, p_drop=0.2)
         self.post = PostNet(mel_dim, num_layers=5, kernel_size=5,
-                            norm="instance", dropout=0.)
+                            norm="instance", dropout=0.2)
         self.to(device)
 
     def get_go(self, B, dtype=torch.float32):
