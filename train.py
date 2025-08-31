@@ -14,18 +14,16 @@ from model import TTSModel
 from tokenizer import tokenize, vocab_size
 from utils import train_val_split, augment_mel, guided_attn_loss, cosine_teach_force, save_model, load_model
 
-# -------------------------
-# Config
-# -------------------------
 device      = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-EPOCHS      = 200
+EPOCHS      = 40
 D_MODEL     = 512
 MEL_DIM     = 80
-NUM_DATA    = 8000          # tiny sanity set
-BATCH_SIZE  = 4
+NUM_DATA    = 20         # tiny sanity set
+BATCH_SIZE  = 2
 VOCAB_SIZE  = vocab_size()
-SPLIT       = 0.8
-LR          = 5e-4
+SPLIT       = 0.9
+LR          = 1e-3
+
 
 
 if __name__ == "__main__":
@@ -40,8 +38,8 @@ if __name__ == "__main__":
     model = TTSModel(D_MODEL, vocab_size=VOCAB_SIZE, mel_dim=MEL_DIM, device=device).to(device)
     criterion_mel = nn.L1Loss()
     criterion_mel_post = nn.L1Loss()
-    criterion_stop = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+    # criterion_stop = nn.BCEWithLogitsLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 
     try:
@@ -61,7 +59,6 @@ if __name__ == "__main__":
         running_loss = 0.0
         teacher_forcing = 1
 
-        # training bar
         bar = tqdm.tqdm(dataloader_train, desc=f"Epoch {epoch + 1}/{EPOCHS} [Train]", leave=True)
         for mel, label in bar:
             mel = mel.to(device)
@@ -70,19 +67,15 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
             mel_out, mel_post, stop_out, attn = model(
-                label, mel,
+                label, augment_mel(mel),
                 teacher_forcing=teacher_forcing,
                 return_alignments=True
             )
 
-            stop_target = torch.zeros_like(stop_out)
-            stop_target[:, -1] = 1.
-
             loss_mel = criterion_mel(mel_out, mel) + criterion_mel_post(mel_post, mel)
             loss_attn = guided_attn_loss(attn, g=0.2)
-            loss_stop = criterion_stop(stop_out, stop_target)
 
-            loss = loss_mel + 0.2 * loss_attn + 0.1 * loss_stop
+            loss = loss_mel + loss_attn * 2
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
             optimizer.step()
@@ -104,18 +97,18 @@ if __name__ == "__main__":
                 mel = mel.to(device)
                 label = label.to(device)
 
-                mel_out, mel_post, _, _ = model(
+                mel_out_val, mel_post_val, _, _ = model(
                     label, mel,
                     teacher_forcing=1.0,
                     return_alignments=False
                 )
 
-                loss_mel = criterion_mel(mel_out, mel) + criterion_mel_post(mel_post, mel)
+                loss_mel = criterion_mel(mel_out_val, mel) + criterion_mel_post(mel_post_val, mel)
                 running_val_loss += loss_mel.item()
 
-        if (epoch + 1) % 2 == 0:
+        if (epoch + 1) % 5 == 0:
             with torch.no_grad():
-                mel_out, mel_post, stop_out, attn = model.inference(
+                _, mel_post, stop_out, attn = model.inference(
                     label, max_len=mel.size(1), return_alignments=True
                 )
 
@@ -125,8 +118,8 @@ if __name__ == "__main__":
                 axes[0].set_title("Attention Alignment")
                 fig.colorbar(im0, ax=axes[0])
 
-                im1 = axes[1].imshow(mel_post[0].detach().cpu().numpy(), aspect="auto", origin="lower")
-                axes[1].set_title("Mel Post (Training)")
+                im1 = axes[1].imshow(mel_out[0].detach().cpu().numpy(), aspect="auto", origin="lower")
+                axes[1].set_title("Mel out (Training)")
                 fig.colorbar(im1, ax=axes[1])
 
                 im2 = axes[2].imshow(mel_post[0].cpu().numpy().T, aspect="auto", origin="lower")

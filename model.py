@@ -62,7 +62,7 @@ class DecoderPreNet(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         for fc in self.layers:
             x = F.relu(fc(x))
-            x = F.dropout(x, p=self.p)
+            x = F.dropout(x, p=self.p, training=True)
         return x
 
 
@@ -81,7 +81,7 @@ class PostNet(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x.transpose(1, 2)
         for blk in self.blocks:
-            y = blk(y)
+            y = y + blk(y)
         y = self.conv_last(y)
         y = y.transpose(1, 2)
         return y
@@ -253,7 +253,7 @@ class TTSModel(nn.Module):
         self.encoder = Encoder(d_model, num_layers=1, dropout=0.2)
         self.decoder = Decoder(d_model, mel_dim, p_drop=0.2)
         self.post = PostNet(mel_dim, num_layers=5, kernel_size=5,
-                            norm="instance", dropout=0.5)
+                            norm="instance", dropout=0.)
         self.to(device)
 
     def get_go(self, B, dtype=torch.float32):

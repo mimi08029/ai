@@ -12,10 +12,12 @@ class Vocab:
     def __init__(self, tokens=None):
         if tokens is None:
             tokens = ALL_CHARS
-        self.stoi = {tok: i+1 for i, tok in enumerate(tokens)}  # 0 = PAD
+        self.stoi = {tok: i+3 for i, tok in enumerate(tokens)}  # 0 = PAD
         self.itos = {i: tok for tok, i in self.stoi.items()}
-        self.pad_id = 0
-
+        self.sos = 0
+        self.eos = 1
+        self.pad_id = 2
+        self.vocab_size = len(self.stoi) + 3
     def encode(self, text):
         return [self.stoi.get(ch, self.pad_id) for ch in text]
 
@@ -27,7 +29,7 @@ def pad_id():
     return VOCAB.pad_id
 
 def vocab_size():
-    return len(VOCAB.stoi) + 1
+    return VOCAB.vocab_size
 
 def tokenize(string):
-    return VOCAB.encode(string)
+    return [VOCAB.sos] + VOCAB.encode(string) + [VOCAB.eos]
