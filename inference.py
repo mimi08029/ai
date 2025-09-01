@@ -1,8 +1,8 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from numpy.ma.core import transpose
 
+from load_dataset import load_data, make_dataset, make_dataloader
 from model import TTSModel
 from tokenizer import tokenize, vocab_size
 from utils import sample_text_to_emb, transpose_major, load_model
@@ -21,17 +21,19 @@ def create_model(checkpoint_path="tts_model.pt"):
 
 def infer(model, text: str, max_len: int = 500):
     """Generate mel-spectrogram from input text."""
-    _, out, _, attn = model.inference(sample_text_to_emb(text), max_len=max_len, return_alignments=True)
-    return attn
+    out, out_post, _, attn = model.inference(sample_text_to_emb(text), max_len=max_len, return_alignments=True)
+    return out_post
 
+pairs = load_data(1)
+dataset = make_dataset(pairs, tokenize_fn=tokenize)
+dataloader = make_dataloader(dataset, 1, False)
 
 if __name__ == "__main__":
     model = create_model("tts_model.pt")
+    a, t, _, _ = next(iter(dataloader))
+    mel, mel_post, stop, attn = model(t.to(device), a.to(device))
 
-    text = "Hello, this is a test of our text to speech model."
-    mel = infer(model, text, max_len=1000)
-
-    plt.imshow(mel.cpu().numpy().squeeze(), aspect="auto", origin="lower")
+    plt.imshow(mel.detach().cpu().numpy().squeeze(), aspect="auto", origin="lower")
     plt.colorbar()
     plt.title("Generated Mel Spectrogram")
     plt.show()
