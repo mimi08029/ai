@@ -270,7 +270,7 @@ class TTSModel(nn.Module):
                 alignments.append(attn)
 
             prev_output = mel_out
-            if torch.sigmoid(stop_out).item() > 0.5:
+            if (torch.sigmoid(stop_out) > 0.5).any().item():
                 break
 
         mel_out = torch.cat(outputs, dim=1)  # [B, T_dec, mel_dim]
