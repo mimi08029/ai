@@ -12,7 +12,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 D_MODEL = 512
 MEL_DIM = 80
 
-def create_model(checkpoint_path="tts_model.pt"):
+def create_model(checkpoint_path="tts_model1.pt"):
     """Load the trained TTS model from checkpoint."""
     model = TTSModel(D_MODEL, vocab_size=vocab_size(), mel_dim=MEL_DIM, device=device)
     load_model(model, checkpoint_path)
@@ -29,7 +29,7 @@ dataset = make_dataset(pairs, tokenize_fn=tokenize)
 dataloader = make_dataloader(dataset, 1, False)
 
 if __name__ == "__main__":
-    model = create_model("tts_model.pt")
+    model = create_model("tts_model1.pt")
     a, t, _, _ = next(iter(dataloader))
     mel, mel_post, stop, attn = model(t.to(device), a.to(device))
 

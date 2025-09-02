@@ -282,20 +282,3 @@ class TTSModel(nn.Module):
             return mel_out, mel_post, stop_out, attn
         return mel_out, mel_post, stop_out
 
-
-# --------------------------
-# Test Run
-# --------------------------
-if __name__ == "__main__":
-    B, T_enc, T_dec, d_model, mel_dim, vocab_size = 2, 20, 30, 128, 80, 50
-    device = torch.device("cpu")
-
-    model = TTSModel(d_model, vocab_size, mel_dim, device)
-    x = torch.randint(0, vocab_size, (B, T_enc), device=device)
-    mel_in = torch.randn(B, T_dec, mel_dim, device=device)
-
-    mel_out, mel_post, stop_out, attn = model(x, mel_in, teacher_forcing=1.0, return_alignments=True)
-    print("mel_out:", mel_out.shape)
-    print("mel_post:", mel_post.shape)
-    print("stop_out:", stop_out.shape)
-    print("attn:", attn.shape if attn is not None else None)

@@ -15,15 +15,15 @@ from tokenizer import tokenize, vocab_size
 from utils import train_val_split, augment_mel, guided_attn_loss, cosine_teach_force, save_model, load_model
 
 device      = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-EPOCHS      = 10
+EPOCHS      = 1000
 D_MODEL     = 512
 MEL_DIM     = 80
-NUM_DATA    = 1000
-BATCH_SIZE  = 4
+NUM_DATA    = 2
+BATCH_SIZE  = 1
 VOCAB_SIZE  = vocab_size()
 SPLIT       = 0.9
-LR          = 1e-4
-
+LR          = 1e-3
+name = f"tts_model-{NUM_DATA}.pt"
 
 if __name__ == "__main__":
     torch.manual_seed(42); np.random.seed(42); random.seed(42)
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 
     try:
-        load_model(model, "tts_model.pt", optimizer, device)
+        load_model(model, name, optimizer, device)
         optimizer.param_groups[0]["lr"] = LR
         print("Loaded checkpoint.")
     except Exception as e:
@@ -110,7 +110,7 @@ if __name__ == "__main__":
                 loss_mel = criterion_mel(mel_out_val, mel) + criterion_mel_post(mel_post_val, mel)
                 loss_stop = criterion_stop(stop_out, stops)
                 loss_attn = guided_attn_loss(attn, g=0.2)
-                loss = loss_mel + loss_attn * 0.5 + loss_stop * 0.1
+                loss = loss_mel + loss_attn * 3 + loss_stop * 0.1
                 running_val_loss += loss.item()
 
         if (epoch + 1) % (EPOCHS // 10) == 0:
@@ -137,7 +137,7 @@ if __name__ == "__main__":
                 plt.show()
                 plt.close()
 
-        save_model(model, "tts_model.pt", optimizer)
+        save_model(model,  name, optimizer)
         avg_val_loss = running_val_loss / max(1, len(dataloader_val))
         val_losses.append(avg_val_loss)
 
