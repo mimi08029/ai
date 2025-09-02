@@ -15,15 +15,14 @@ from tokenizer import tokenize, vocab_size
 from utils import train_val_split, augment_mel, guided_attn_loss, cosine_teach_force, save_model, load_model
 
 device      = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-EPOCHS      = 40
+EPOCHS      = 10
 D_MODEL     = 512
 MEL_DIM     = 80
-NUM_DATA    = 2000
+NUM_DATA    = 2
 BATCH_SIZE  = 2
 VOCAB_SIZE  = vocab_size()
 SPLIT       = 0.9
 LR          = 1e-3
-
 
 
 if __name__ == "__main__":
@@ -78,7 +77,7 @@ if __name__ == "__main__":
             loss_stop = criterion_stop(stop_out, stops)
             loss_attn = guided_attn_loss(attn, g=0.2)
 
-            loss = loss_mel + loss_attn * 0.5 + loss_stop * 0.1
+            loss = loss_mel + loss_attn * 3 + loss_stop * 0.1
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
             optimizer.step()

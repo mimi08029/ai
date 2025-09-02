@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple
 
+from matplotlib import pyplot as plt
+
 
 # --------------------------
 # Zoneout LSTM Cell
@@ -245,6 +247,40 @@ class TTSModel(nn.Module):
         )
         mel_post = self.post(mel_out) + mel_out
         return mel_out, mel_post, stop_out, attn
+
+    def inference(self, x, max_len=500, teacher_forcing=1.0, enc_mask=None, return_alignments=False):
+        enc_out = self.encoder(self.emb(x))
+        B, T_enc, D = enc_out.shape
+        go = self.get_go(B, dtype=torch.float32).squeeze(1)
+        prev_output = go
+        outputs, stop_outputs = [], []
+        alignments = [] if return_alignments else None
+
+        state = self.decoder._init_state(B, D, T_enc, device=self.device, dtype=torch.float32)
+
+        for t in range(max_len):
+            mel_out, stop_out, attn, state = self.decoder._step(
+                enc_out, prev_output, state, enc_mask
+            )
+
+            outputs.append(mel_out.unsqueeze(1))
+            stop_outputs.append(stop_out.unsqueeze(1))
+
+            if return_alignments:
+                alignments.append(attn)
+
+            prev_output = mel_out
+            if torch.sigmoid(stop_out).item() > 0.5:
+                break
+
+        mel_out = torch.cat(outputs, dim=1)  # [B, T_dec, mel_dim]
+        stop_out = torch.cat(stop_outputs, dim=1)  # [B, T_dec, 1]
+        mel_post = self.post(mel_out) + mel_out
+
+        if return_alignments:
+            attn = torch.stack(alignments, dim=1)  # [B, T_dec, T_enc]
+            return mel_out, mel_post, stop_out, attn
+        return mel_out, mel_post, stop_out
 
 
 # --------------------------

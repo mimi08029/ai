@@ -58,7 +58,7 @@ def collate_fn(batch):
     texts_padded = pad_sequence(texts, batch_first=True, padding_value=0)
 
     stops = (torch.arange(audios_padded.size(1))[None, :] > audio_lengths[:, None]).to(torch.float)
-    text_mask  = torch.arange(texts_padded.size(1))[None, :] < text_lengths[:, None]
+    text_mask  = torch.arange(texts_padded.size(1))[None, :] > text_lengths[:, None]
 
     return audios_padded, texts_padded, stops, text_mask
 
