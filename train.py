@@ -15,14 +15,14 @@ from tokenizer import tokenize, vocab_size
 from utils import train_val_split, augment_mel, guided_attn_loss, cosine_teach_force, save_model, load_model
 
 device      = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-EPOCHS      = 1000
+EPOCHS      = 10
 D_MODEL     = 512
 MEL_DIM     = 80
 NUM_DATA    = 2
 BATCH_SIZE  = 1
 VOCAB_SIZE  = vocab_size()
 SPLIT       = 0.9
-LR          = 1e-3
+LR          = 1e-4
 name = f"tts_model-{NUM_DATA}.pt"
 
 if __name__ == "__main__":
@@ -50,9 +50,6 @@ if __name__ == "__main__":
 
     train_losses, val_losses = [], []
 
-    # -------------------------
-    # Training loop
-    # -------------------------
     for epoch in range(EPOCHS):
         model.train()
         running_loss = 0.0
@@ -87,9 +84,6 @@ if __name__ == "__main__":
         avg_train_loss = running_loss / max(1, len(dataloader_train))
         train_losses.append(avg_train_loss)
 
-        # -------------------------
-        # Validation
-        # -------------------------
         model.eval()
         running_val_loss = 0.0
         with torch.no_grad():
@@ -109,7 +103,7 @@ if __name__ == "__main__":
 
                 loss_mel = criterion_mel(mel_out_val, mel) + criterion_mel_post(mel_post_val, mel)
                 loss_stop = criterion_stop(stop_out, stops)
-                loss_attn = guided_attn_loss(attn, g=0.2)
+                loss_attn = guided_attn_loss(attn, g=0.1)
                 loss = loss_mel + loss_attn * 3 + loss_stop * 0.1
                 running_val_loss += loss.item()
 

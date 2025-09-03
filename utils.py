@@ -102,7 +102,7 @@ def guided_attn_loss(attn, g=0.2):
     J = torch.arange(T_enc).unsqueeze(0) / T_enc
     G = 1 - torch.exp(-(W - J) ** 2 / (2 * g * g))
     G = G.to(attn.device)
-    return (attn * G.unsqueeze(0)).mean()
+    return (attn * G.unsqueeze(0)).sum()
 
 def cosine_teach_force(progress):
     return 0.2 + 0.8 * (0.5 * (1 + math.cos(math.pi * progress)))

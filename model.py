@@ -7,11 +7,7 @@ from typing import Optional, Tuple
 from matplotlib import pyplot as plt
 
 
-# --------------------------
-# Zoneout LSTM Cell
-# --------------------------
 class ZoneoutLSTMCell(nn.Module):
-    """LSTMCell with Zoneout regularization (Krueger et al., 2016)."""
 
     def __init__(self, input_size: int, hidden_size: int, zoneout_prob: float = 0.1):
         super().__init__()
@@ -37,9 +33,6 @@ class ZoneoutLSTMCell(nn.Module):
         return h, c
 
 
-# --------------------------
-# Conv PostNet Block
-# --------------------------
 class ConvPostNetBlock(nn.Module):
     def __init__(self, in_ch, out_ch, k, p, dropout=0.0,
                  norm="instance", activation=nn.Tanh):
@@ -53,9 +46,6 @@ class ConvPostNetBlock(nn.Module):
         return self.drop(self.act(self.norm(self.conv(x))))
 
 
-# --------------------------
-# Embedding + Conv stack
-# --------------------------
 class EmbNet(nn.Module):
     def __init__(self, d_model, vocab_size, p_drop=0.5, n_conv=3, k=5):
         super().__init__()
@@ -77,10 +67,6 @@ class EmbNet(nn.Module):
             h = conv(h)
         return h.transpose(1, 2)
 
-
-# --------------------------
-# Decoder PreNet
-# --------------------------
 class DecoderPreNet(nn.Module):
     def __init__(self, in_dim, hidden_sizes=[256, 256], p_drop=0.5):
         super().__init__()
@@ -93,10 +79,6 @@ class DecoderPreNet(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-
-# --------------------------
-# PostNet
-# --------------------------
 class PostNet(nn.Module):
     def __init__(self, mel_dim, num_layers=5, kernel_size=5, norm="instance", dropout=0.2):
         super().__init__()
@@ -115,9 +97,6 @@ class PostNet(nn.Module):
         return y
 
 
-# --------------------------
-# Location-Sensitive Attention
-# --------------------------
 class LocationSensitiveAttention(nn.Module):
     def __init__(self, d_model, kernel_size=31, out_channels=32):
         super().__init__()
@@ -145,10 +124,6 @@ class LocationSensitiveAttention(nn.Module):
         ctx = torch.bmm(a.unsqueeze(1), memory).squeeze(1)
         return ctx, a
 
-
-# --------------------------
-# Encoder (BiLSTM + Linear)
-# --------------------------
 class Encoder(nn.Module):
     def __init__(self, d_model, num_layers=1, dropout=0.2):
         super().__init__()
@@ -162,10 +137,6 @@ class Encoder(nn.Module):
         y, _ = self.lstm(x)
         return self.linear(y)
 
-
-# --------------------------
-# Decoder with Zoneout
-# --------------------------
 class Decoder(nn.Module):
     def __init__(self, d_model, mel_dim=80, zoneout_prob=0.1, p_drop=0.2):
         super().__init__()
@@ -222,9 +193,6 @@ class Decoder(nn.Module):
         return mel_out, stop_out, attn_out
 
 
-# --------------------------
-# Full Model
-# --------------------------
 class TTSModel(nn.Module):
     def __init__(self, d_model, vocab_size, mel_dim, device):
         super().__init__()
