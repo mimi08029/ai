@@ -104,5 +104,5 @@ def guided_attn_loss(attn, g=0.2):
     G = G.to(attn.device)
     return (attn * G.unsqueeze(0)).mean()
 
-def cosine_teach_force(progress):
-    return 0.2 + 0.8 * (0.5 * (1 + math.cos(math.pi * progress)))
+def cosine_teach_force(epoch, epochs):
+    return 0.2 + 0.8 * (0.5 * (1 + math.cos(math.pi * epoch / epochs)))

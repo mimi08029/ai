@@ -53,7 +53,7 @@ if __name__ == "__main__":
     for epoch in range(EPOCHS):
         model.train()
         running_loss = 0.0
-        teacher_forcing = 1
+        teacher_forcing = cosine_teach_force(epoch, EPOCHS)
 
         bar = tqdm.tqdm(dataloader_train, desc=f"Epoch {epoch + 1}/{EPOCHS} [Train]", leave=True)
         for mel, label, stops, text_mask in bar:
