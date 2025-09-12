@@ -1,4 +1,4 @@
-torch==2.9.0.dev20250825+cu128
+torch==2.8.0
 matplotlib==3.10.0
 numpy==2.2.6
 tqdm==4.67.1
